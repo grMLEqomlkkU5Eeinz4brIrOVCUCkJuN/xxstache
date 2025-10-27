@@ -1,6 +1,6 @@
 # xxstache
 
-A port of [`@next-boost/hybrid-disk-cache`](https://github.com/node-modules/hybrid-disk-cache) for toy projects, tweaked to use xxhash64 for hashing.
+A port of [`@next-boost/hybrid-disk-cache`](https://github.com/next-boost/hybrid-disk-cache) for toy projects, tweaked to use xxhash64 for hashing.
 
 This is a simple hybrid disk cache for Node.js. It automatically stores small values in SQLite and large values on disk, so your database doesn't get bloated.
 
