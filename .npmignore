@@ -1,0 +1,21 @@
+# Source files
+src/
+test/
+benchmarks/
+
+# Build configs
+tsconfig.json
+jest.config.js
+eslint.config.mjs
+
+# Development
+.gitignore
+.tmp/
+coverage/
+*.log
+.vscode/
+.idea/
+
+# Temporary files
+*.tsbuildinfo
+
