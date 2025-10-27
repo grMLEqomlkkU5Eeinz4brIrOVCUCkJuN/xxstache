@@ -348,44 +348,23 @@ await adapter.shutdown()
 
 ## Benchmarks
 
-Benchmark results from a Micron_2450_MTFDKBA512TFK with xxstache:
+Benchmark results with xxstache:
 
 ### Write Performance
 
-**Test:** Writing 100 iterations of 12 different data sizes (10B to 50KB)
+**Test:** Writing 3000 iterations of 15 different data sizes (10B to 500KB)
 
-- **Average:** 99.29 μs/record
-- **Range:** 10B to 50KB files
+- **Average:** 42.68 μs/record
+- **Range:** 10B to 500KB files
 - **Storage:** Automatic (SQLite for small, disk for large)
+- **Platform:** Windows 10
 
 ### Read Performance
 
-**Test:** Reading 100 iterations of cached entries
+**Test:** Reading 3000 iterations of cached entries
 
-- **Average:** 58.46 μs/record
+- **Average:** 59.77 μs/record
 - **Notes:** Includes both in-DB and disk-backed entries
-
-### Has Check Performance
-
-**Test:** Checking cache status 100 iterations
-
-- **Average:** 8.73 μs/record
-- **Note:** Fastest operation (no data transfer)
-
-### Delete Performance
-
-**Test:** Deleting 100 iterations of entries
-
-- **Average:** 37.03 μs/record
-- **Notes:** Includes cleanup of associated files
-
-### LRU Eviction Performance
-
-**Test:** Writing 200 entries to cache with maxEntries=50
-
-- **Average:** 165.01 μs/record
-- **Notes:** Includes automatic eviction overhead
-- **Final Count:** 50 entries (150 were evicted)
 
 ## Performance Characteristics
 
