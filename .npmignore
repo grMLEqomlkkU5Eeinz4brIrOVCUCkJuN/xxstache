@@ -18,4 +18,5 @@ coverage/
 
 # Temporary files
 *.tsbuildinfo
+docs.md
 
