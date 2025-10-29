@@ -1,6 +1,6 @@
 {
 	"name": "xxstache",
-	"version": "1.0.1",
+	"version": "1.0.2",
 	"description": "A port of hybrid-disk-cache using xxhash64 for toy projects",
 	"main": "dist/index.js",
 	"module": "dist/index.js",
