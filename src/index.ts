@@ -13,7 +13,7 @@
  * - High-performance SQLite with WAL mode
  */
 
-import SQLite3, { Database } from "better-sqlite3"
+import SQLite3, { Database, Statement } from "better-sqlite3"
 import fs from "fs-extra"
 import { join as pathJoin } from "path"
 
@@ -118,6 +118,21 @@ class Cache {
 	public path: string
 	public dbPath: string
 
+	// Prepared statements for performance - I just learnt about this
+	private stmtInsert: Statement
+	private stmtGet: Statement
+	private stmtUpdateAtime: Statement
+	private stmtHas: Statement
+	private stmtGetFilename: Statement
+	private stmtDelete: Statement
+	private stmtCountEntries: Statement
+	private stmtEvictLRU: Statement
+	private stmtPurgeSelect: Statement
+	private stmtPurgeDelete: Statement
+
+	// Transaction wrapper for bulk inserts (synchronous body)
+	private insertManyTx!: (rows: Array<{ key: string; value: Buffer | null; filename: string | null; ttl: number; atime: number }>) => void
+
 	/**
 	 * Constructs a new cache instance.
 	 * @param options - Configuration options for the cache
@@ -136,7 +151,12 @@ class Cache {
 		if (maxEntries !== undefined) this.maxEntries = maxEntries
 
 		const db = new SQLite3(this.dbPath)
+		// Performance-oriented pragmas; adjust for your durability needs
 		db.exec("PRAGMA journal_mode = WAL")
+		db.exec("PRAGMA synchronous = NORMAL")
+		db.exec("PRAGMA temp_store = MEMORY")
+		// negative cache_size sets size in KB of page cache in memory
+		db.exec("PRAGMA cache_size = -20000")
 		for (const s of DDL.trim().split("\n")) {
 			db.prepare(s).run()
 		}
@@ -150,6 +170,28 @@ class Cache {
 		}
 		
 		this.db = db
+
+		// Prepare all statements once for performance
+		this.stmtInsert = db.prepare(
+			"INSERT INTO cache (key, value, filename, ttl, atime) VALUES (@key, @value, @filename, @ttl, @atime)" +
+			" ON CONFLICT(key)" +
+			" DO UPDATE SET value = @value, ttl = @ttl, filename = @filename, atime = @atime",
+		)
+		this.stmtGet = db.prepare("SELECT value, filename FROM cache WHERE key = ?")
+		this.stmtUpdateAtime = db.prepare("UPDATE cache SET atime = ? WHERE key = ?")
+		this.stmtHas = db.prepare("SELECT ttl FROM cache WHERE key = ?")
+		this.stmtGetFilename = db.prepare("SELECT filename FROM cache WHERE key = ?")
+		this.stmtDelete = db.prepare("DELETE FROM cache WHERE key = ?")
+		this.stmtCountEntries = db.prepare("SELECT COUNT(*) as count FROM cache WHERE ttl > ?")
+		this.stmtEvictLRU = db.prepare("SELECT key, filename FROM cache WHERE ttl > ? ORDER BY atime ASC LIMIT ?")
+		this.stmtPurgeSelect = db.prepare("SELECT key, filename FROM cache WHERE ttl < ?")
+		this.stmtPurgeDelete = db.prepare("DELETE FROM cache WHERE ttl < ?")
+
+		// Build a synchronous transaction for bulk inserts
+		const tx = db.transaction((rows: Array<{ key: string; value: Buffer | null; filename: string | null; ttl: number; atime: number }>) => {
+			for (const row of rows) this.stmtInsert.run(row)
+		})
+		this.insertManyTx = tx
 	}
 
 	/**
@@ -199,6 +241,38 @@ class Cache {
 	}
 
 	/**
+	 * Efficiently set many entries in a single transaction.
+	 * Precomputes filenames for large values to avoid async inside transaction.
+	 */
+	async setMany(entries: Array<{ key: string; value: Buffer; ttl?: number }>) {
+		// Precompute filenames for large values, and shape rows
+		const now = new Date().getTime() / 1000
+		const rows: Array<{ key: string; value: Buffer | null; filename: string | null; ttl: number; atime: number }> = []
+		for (const { key, value, ttl } of entries) {
+			let filename: string | null = null
+			if (value.length > this.maxInMemorySize) {
+				filename = await xxhname(key)
+				write(this.path, filename, value)
+			}
+			rows.push({
+				key,
+				value: filename ? null : value,
+				filename,
+				ttl: now + (ttl ?? this.ttl),
+				atime: now,
+			})
+		}
+
+		// Execute single transaction
+		this.insertManyTx(rows)
+
+		// Optional single LRU pass
+		if (this.maxEntries && this.maxEntries > 0) {
+			await this._evictLRU()
+		}
+	}
+
+	/**
 	 * Retrieves a value from the cache.
 	 * Automatically loads from disk if the value is file-backed.
 	 *
@@ -213,14 +287,14 @@ class Cache {
 	 * ```
 	 */
 	async get(key: string, defaultValue?: Buffer): Promise<Buffer | undefined> {
-		const rv = this.db
-			.prepare("SELECT value, filename FROM cache WHERE key = ?")
-			.get(key) as CacheRowWithValue | undefined
+		const rv = this.stmtGet.get(key) as CacheRowWithValue | undefined
 		if (!rv) return defaultValue
 		
-		// Update access time for LRU tracking
-		const now = new Date().getTime() / 1000
-		this.db.prepare("UPDATE cache SET atime = ? WHERE key = ?").run(now, key)
+		// Update access time for LRU tracking (only if maxEntries is configured)
+		if (this.maxEntries && this.maxEntries > 0) {
+			const now = new Date().getTime() / 1000
+			this.stmtUpdateAtime.run(now, key)
+		}
 		
 		if (rv && rv.filename) rv.value = read(this.path, rv.filename)
 		return rv.value ?? defaultValue
@@ -242,7 +316,7 @@ class Cache {
 	 */
 	async has(key: string): Promise<CacheStatus> {
 		const now = new Date().getTime() / 1000
-		const rv = this.db.prepare("SELECT ttl FROM cache WHERE key = ?").get(key) as CacheRowWithTtl | undefined
+		const rv = this.stmtHas.get(key) as CacheRowWithTtl | undefined
 		return !rv ? "miss" : rv.ttl > now ? "hit" : "stale"
 	}
 
@@ -257,10 +331,8 @@ class Cache {
 	 * ```
 	 */
 	async del(key: string) {
-		const rv = this.db
-			.prepare("SELECT filename FROM cache WHERE key = ?")
-			.get(key) as CacheRowWithFilename | undefined
-		this.db.prepare("DELETE FROM cache WHERE key = ?").run(key)
+		const rv = this.stmtGetFilename.get(key) as CacheRowWithFilename | undefined
+		this.stmtDelete.run(key)
 		this._delFile(rv?.filename)
 	}
 
@@ -273,7 +345,7 @@ class Cache {
 
 		// Count current entries (non-expired)
 		const now = new Date().getTime() / 1000
-		const count = this.db.prepare("SELECT COUNT(*) as count FROM cache WHERE ttl > ?").get(now) as { count: number }
+		const count = this.stmtCountEntries.get(now) as { count: number }
 		
 		// If we're under the limit, no eviction needed
 		if (count.count <= this.maxEntries) return
@@ -282,13 +354,11 @@ class Cache {
 		const toEvict = count.count - this.maxEntries
 
 		// Get the least recently used entries (oldest atime)
-		const rows = this.db
-			.prepare("SELECT key, filename FROM cache WHERE ttl > ? ORDER BY atime ASC LIMIT ?")
-			.all(now, toEvict) as CacheRowWithFilename[]
+		const rows = this.stmtEvictLRU.all(now, toEvict) as CacheRowWithFilename[]
 
 		// Delete them from cache and their files
 		for (const row of rows) {
-			this.db.prepare("DELETE FROM cache WHERE key = ?").run(row.key)
+			this.stmtDelete.run(row.key)
 			this._delFile(row.filename)
 		}
 	}
@@ -315,10 +385,8 @@ class Cache {
 	async purge() {
 		// ttl + tbd < now => ttl < now - tbd
 		const now = new Date().getTime() / 1000 - this.tbd
-		const rows = this.db
-			.prepare("SELECT key, filename FROM cache WHERE ttl < ?")
-			.all(now) as CacheRowWithFilename[]
-		this.db.prepare("DELETE FROM cache WHERE ttl < ?").run(now)
+		const rows = this.stmtPurgeSelect.all(now) as CacheRowWithFilename[]
+		this.stmtPurgeDelete.run(now)
 		for (const row of rows) this._delFile(row.filename)
 		await purgeEmptyPath(this.path)
 		return rows.length

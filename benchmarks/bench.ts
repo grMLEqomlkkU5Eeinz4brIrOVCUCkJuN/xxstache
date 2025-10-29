@@ -17,31 +17,32 @@ function benchData(size = 6) {
 	return full
 }
 
-function benchWrite(cache: Cache, batch: number, size = 6) {
+async function benchWrite(cache: Cache, batch: number, size = 6) {
 	console.log("> generating bench data from 10B to %sB", 5 * Math.pow(10, size))
 	const full = benchData(size)
 
-	let count = 0
-	console.log("> starting %s x %s writes", batch, full.length)
-	const start = process.hrtime()
+	// Build all entries and write in a single transaction for realistic throughput
+	const entries: Array<{ key: string; value: Buffer }> = []
 	for (let i = 0; i < batch; i++) {
 		for (let j = 0; j < full.length; j++) {
-			cache.set("key-" + j, full[j])
-			count += 1
+			entries.push({ key: "key-" + j, value: full[j] })
 		}
 	}
 
-	log(start, count)
+	console.log("> starting %s x %s writes", batch, full.length)
+	const start = process.hrtime()
+	await cache.setMany(entries)
+	log(start, entries.length)
 	return full.map((_, i) => "key-" + i)
 }
 
-function benchRead(cache: Cache, batch: number, keys: string[]) {
+async function benchRead(cache: Cache, batch: number, keys: string[]) {
 	let count = 0
 	console.log("> starting %s x %s reads", batch, keys.length)
 	const start = process.hrtime()
 	for (let i = 0; i < batch; i++) {
 		for (const key of keys) {
-			cache.get(key)
+			await cache.get(key)
 			count += 1
 		}
 	}
@@ -50,9 +51,11 @@ function benchRead(cache: Cache, batch: number, keys: string[]) {
 }
 
 if (require.main === module) {
-	const cache = new Cache()
-	console.log("> cache located at: %s", cache.path)
-	const batch = 3000
-	const keys = benchWrite(cache, batch, 5)
-	benchRead(cache, batch, keys)
+	(async () => {
+		const cache = new Cache()
+		console.log("> cache located at: %s", cache.path)
+		const batch = 3000
+		const keys = await benchWrite(cache, batch, 5)
+		await benchRead(cache, batch, keys)
+	})()
 }
