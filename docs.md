@@ -354,7 +354,7 @@ Benchmark results with xxstache:
 
 **Test:** Writing 3000 iterations of 15 different data sizes (10B to 500KB)
 
-- **Average:** 42.68 μs/record
+- **Average:** 40.29 μs/record
 - **Range:** 10B to 500KB files
 - **Storage:** Automatic (SQLite for small, disk for large)
 - **Platform:** Windows 10
@@ -363,7 +363,7 @@ Benchmark results with xxstache:
 
 **Test:** Reading 3000 iterations of cached entries
 
-- **Average:** 59.77 μs/record
+- **Average:** 13.52 μs/record
 - **Notes:** Includes both in-DB and disk-backed entries
 
 ## Performance Characteristics
@@ -469,4 +469,72 @@ The original `@next-boost/hybrid-disk-cache` uses simple hash-based directory st
 - Faster hash calculation (xxhash64 vs traditional hash)
 - Better distribution of files across directories
 - Consistent performance at scale
+
+## FAQ
+
+### Do total entries include expired ones?
+
+- **LRU counting**: No. LRU eviction uses only entries with `ttl > now` (fresh). Expired entries are ignored for the `maxEntries` limit.
+- **On disk**: Expired entries remain until they are purged or overwritten. See purge behavior below.
+
+### What happens to expired entries?
+
+- `has(key)` returns `"stale"` if the key exists but its `ttl <= now`.
+- `get(key)` will still return the value if it exists (even if stale) unless you implement your own policy to skip stale reads.
+- `purge()` removes entries whose `ttl + tbd < now` and deletes their associated files, then prunes empty directories.
+
+### When is `atime` updated?
+
+- `get(key)` updates `atime` only when `maxEntries` is configured (> 0). If you don’t use LRU, `atime` updates are skipped for performance.
+
+### Does `set(key, value)` overwrite TTL and storage location?
+
+- Yes. Each `set` writes a fresh `ttl` (default or provided) and re-evaluates storage based on `maxInMemorySize`.
+
+### If I change `maxInMemorySize`, are existing entries migrated?
+
+- No. Existing rows remain as-is. The new threshold applies to future writes.
+
+### Where is data stored by default?
+
+- Default directory is your OS temp under `hdc` (e.g., Windows: `C:\Users\\<you>\\AppData\\Local\\Temp\\hdc`).
+- Small values (< `maxInMemorySize`) are stored in SQLite BLOBs; large values are stored as files under that directory with hashed paths.
+
+### Does purging remove files too?
+
+- Yes. `purge()` deletes rows and their associated files, then prunes any empty directories under the cache path.
+
+### Are writes transactional?
+
+- Individual `set()` is a single upsert in SQLite. When storing large values, the file is written before the DB upsert; a crash between the two can leave an orphan file.
+- `setMany()` batches many upserts in a single SQLite transaction for high throughput. Filenames for large values are computed and files written before the transaction is executed.
+
+### How to benchmark the fastest configuration?
+
+- Use `dbPath: ":memory:"` for an in-memory SQLite database (metadata only). Large values > threshold still go to disk.
+- Consider raising `maxInMemorySize` (e.g., 50 KB) to keep more values in SQLite.
+- Throughput-focused PRAGMAs are enabled by default: `WAL`, `synchronous=NORMAL`, `temp_store=MEMORY`, tuned `cache_size`.
+- For non-durable testing only, `synchronous=OFF` can be faster.
+
+### Is it safe to share a cache between processes?
+
+- The SQLite backend (better-sqlite3) is robust with WAL for concurrency, but coordinating multiple Node processes that also write files under the same directory can be tricky. Prefer a single writer process per cache path.
+
+### Can I store strings or JSON?
+
+- Yes. Convert to `Buffer` on write and back on read, for example:
+
+```typescript
+await cache.set('user', Buffer.from(JSON.stringify(obj)))
+const buf = await cache.get('user')
+const obj = buf ? JSON.parse(buf.toString('utf8')) : undefined
+```
+
+### Does `get(key, defaultValue)` return the default for missing keys?
+
+- Yes. If the key is missing, it returns `defaultValue` (or `undefined` if not provided).
+
+### What does the Adapter do?
+
+- `Adapter` wraps a `Cache` and automatically purges expired entries on an interval. Use it when you want hands-free cleanup in long-running processes.
 
