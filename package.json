@@ -53,7 +53,7 @@
 		"@types/better-sqlite3": "^7.6.13",
 		"@types/fs-extra": "^11.0.4",
 		"@types/jest": "^30.0.0",
-		"@types/node": "^24.9.1",
+		"@types/node": "^25.0.0",
 		"@types/xxhashjs": "^0.2.4",
 		"eslint": "^9.38.0",
 		"jest": "^30.2.0",
