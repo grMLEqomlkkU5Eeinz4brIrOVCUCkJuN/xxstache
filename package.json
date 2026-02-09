@@ -55,7 +55,7 @@
 		"@types/jest": "^30.0.0",
 		"@types/node": "^25.0.0",
 		"@types/xxhashjs": "^0.2.4",
-		"eslint": "^9.38.0",
+		"eslint": "^10.0.0",
 		"jest": "^30.2.0",
 		"rimraf": "^6.0.1",
 		"ts-jest": "^29.4.5",
