@@ -63,7 +63,7 @@
 		"typescript-eslint": "^8.65.0"
 	},
 	"dependencies": {
-		"better-sqlite3": "^12.11.1",
+		"better-sqlite3": "^13.0.2",
 		"fs-extra": "^11.4.0",
 		"xxhash-wasm": "^1.1.0"
 	}
