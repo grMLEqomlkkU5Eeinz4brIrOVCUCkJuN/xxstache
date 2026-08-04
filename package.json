@@ -50,7 +50,7 @@
 	},
 	"homepage": "https://github.com/grMLEqomlkkU5Eeinz4brIrOVCUCkJuN/xxstache#readme",
 	"devDependencies": {
-		"@types/better-sqlite3": "^7.6.13",
+		"@types/better-sqlite3": "^9.6.0",
 		"@types/fs-extra": "^11.0.4",
 		"@types/jest": "^30.0.0",
 		"@types/node": "^26.1.1",
